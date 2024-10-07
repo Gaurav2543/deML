@@ -7,9 +7,6 @@
 #include <map>
 #include <gzstream.h>
 
-/////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-
 #include <pthread.h>
 #include <queue>
 #include <vector>
@@ -19,9 +16,6 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <atomic>
-
-/////////////////////////////////////////////////////////////////////////////////////////////////////////
-
 
 #include <api/SamHeader.h>
 #include <api/BamMultiReader.h>
@@ -109,8 +103,6 @@ struct compareNameTally {
     }
 };
 
-/////////////////////////////////////////////////////////////////////////////////////////////////////////
-
 // This structure represents a unit of work (either a single read or a pair of reads) 
 // that a thread can process. The queue will hold these work items, and we use a mutex
 // and condition variable to ensure thread-safe access to the queue.
@@ -136,8 +128,6 @@ pthread_mutex_t queueMutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t queueCond = PTHREAD_COND_INITIALIZER;
 bool allDataRead = false;
 std::atomic<int> itemsProcessed(0);
-
-/////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 static string get_string_field( BamAlignment &al, const char* name ) 
 {
@@ -936,8 +926,6 @@ void processFastq(string           forwardfq,
 
 }
 
-/////////////////////////////////////////////////////////////////////////////////////////////////////////
-
 // This function represents the work each thread will perform. It continuously retrieves 
 // work items from the queue and processes them using the existing processPairedEndReads 
 // or processSingleEndReads functions.
@@ -1048,7 +1036,6 @@ double get_memory_usage() {
     return r_usage.ru_maxrss / 1024.0;  // Convert to MB
 }
 
-/////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 int main (int argc, char *argv[]) {
 
@@ -1531,7 +1518,6 @@ int main (int argc, char *argv[]) {
     map<string,int> conflictSeq;
 
 
-/////////////////////////////////////////////////////////////////////////////////////////////////////////
 	
 	ThreadData threadData;
 	threadData.writer = &writer;
@@ -1573,8 +1559,6 @@ int main (int argc, char *argv[]) {
 	
 	// std::cout << "Warm-up complete. Starting timed runs." << std::endl;
 	itemsProcessed = 0; // Reset for next run
-
-/////////////////////////////////////////////////////////////////////////////////////////////////////////
 
     if(useFastq){
 
@@ -1644,9 +1628,6 @@ int main (int argc, char *argv[]) {
 	    return 1;	
 	}
 
-
-	/////////////////////////////////////////////////////////////////////////////////////////////////////////
-
 	// This code reads alignments from the input, creates work items, and adds them to the queue for 
 	// processing by worker threads. After all data is read, it signals the worker threads to finish and 
 	// waits for them to complete.
@@ -1683,7 +1664,6 @@ int main (int argc, char *argv[]) {
 		pthread_join(threads[i], NULL);
 	}
 
-	/////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 	reader.Close();
 	writer.Close();
