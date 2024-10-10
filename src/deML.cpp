@@ -62,6 +62,7 @@ struct tallyForRG{
 };
 
 int qualOffset=33;
+int userSetThreads = 0; 
 
 static string tagIndex1Seq  = "XI";
 static string tagIndex1Qual = "YI";
@@ -1247,7 +1248,11 @@ int main (int argc, char *argv[]) {
 	}
 
 
-
+	if (strcmp(argv[i], "--threads") == 0 || strcmp(argv[i], "-t") == 0) {
+	    userSetThreads = atoi(argv[i+1]);
+	    i++;
+	    continue;
+	}
 
 
 	if(strcmp(argv[i],"--maxerr") == 0 ){
@@ -1533,7 +1538,8 @@ int main (int argc, char *argv[]) {
 	unsigned int hardwareThreads = std::thread::hardware_concurrency();
 
 	// Use all threads except 4, but ensure we have at least 1 thread
-	int numThreads = std::max(1, static_cast<int>(hardwareThreads) - 4);
+	int numThreads = (userSetThreads > 0) ? userSetThreads : hardwareThreads - 2;
+	// int numThreads = std::max(1, static_cast<int>(hardwareThreads) - 2);
 	// int numThreads = 1;
 
     std::cout << "--------------------------------------" << std::endl;
