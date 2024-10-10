@@ -7,7 +7,7 @@ This project is an extension of the original deML tool, which is designed to dem
 ## Key Features
 
 1. **Multithreading Support**: The tool now utilizes multiple threads to process reads in parallel, potentially significantly improving performance on multi-core systems.
-2. **Dynamic Thread Count**: The number of threads is automatically determined based on the available hardware, using all but 4 of the available threads.
+2. **User-Defined Thread Count**: The number of threads to bee used is set by the user. (Default number of threads is all available hardware threads - 2)
 3. **Support for BAM and FASTQ**: The tool can process both BAM and FASTQ input files.
 4. **Performance Measurement**: Includes built-in timing and memory usage measurements to compare single-threaded and multi-threaded performance.
 5. **Thread-Safe Operations**: Implemented mutex locks to ensure thread-safe access to shared resources.
@@ -33,3 +33,6 @@ To Run the Tool:
 ```
 ./deML [options] <input_file>
 ```
+
+Options:
+-t, --threads <num>    Set the number of threads to use (default: auto-detect - 2)
