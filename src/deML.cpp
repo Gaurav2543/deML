@@ -117,12 +117,29 @@ struct ThreadData {
     bool failBAM;
 };
 
+// Add these with other global variables/declarations
 struct WorkItem {
     BamAlignment al;
     BamAlignment al2;
     bool isPaired;
-	ThreadData* data;
+    ThreadData* data;
+    int rank;
 };
+
+struct ProcessedWorkItem {
+    WorkItem item;
+    bool written;
+};
+
+struct CompareWorkItemRank {
+    bool operator()(const ProcessedWorkItem& a, const ProcessedWorkItem& b) {
+        return a.item.rank > b.item.rank;  // Priority queue is min heap
+    }
+};
+
+std::priority_queue<ProcessedWorkItem, vector<ProcessedWorkItem>, CompareWorkItemRank> outputQueue;
+pthread_mutex_t outputQueueMutex = PTHREAD_MUTEX_INITIALIZER;
+int nextRankToWrite = 0;
 
 std::queue<WorkItem> workQueue;
 pthread_mutex_t queueMutex = PTHREAD_MUTEX_INITIALIZER;
@@ -937,97 +954,81 @@ pthread_mutex_t conflictSeqMutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t writerMutex = PTHREAD_MUTEX_INITIALIZER;
 
 void* workerThread(void* arg) {
-	// std::cout << "Thread " << pthread_self() << " started processing." << std::endl;
     ThreadData* data = static_cast<ThreadData*>(arg);
     while (true) {
-		WorkItem item;
-		bool hasWork = false;
+        WorkItem item;
+        bool hasWork = false;
 
-		pthread_mutex_lock(&queueMutex);
-		while (workQueue.empty() && !allDataRead) {
-			pthread_cond_wait(&queueCond, &queueMutex);
-		}
-		if (!workQueue.empty()) {
-			item = workQueue.front();
-			workQueue.pop();
-			hasWork = true;
-		} else if (allDataRead) {
-			pthread_mutex_unlock(&queueMutex);
-			break;
-		}
-		pthread_mutex_unlock(&queueMutex);
+        pthread_mutex_lock(&queueMutex);
+        while (workQueue.empty() && !allDataRead) {
+            pthread_cond_wait(&queueCond, &queueMutex);
+        }
+        if (!workQueue.empty()) {
+            item = workQueue.front();
+            workQueue.pop();
+            hasWork = true;
+        } else if (allDataRead) {
+            pthread_mutex_unlock(&queueMutex);
+            break;
+        }
+        pthread_mutex_unlock(&queueMutex);
 
-		if (hasWork) {
-			string index1, index1Q, index2, index2Q;
-			getIndices(item.al, index1, index1Q, index2, index2Q);
+        if (hasWork) {
+            string index1, index1Q, index2, index2Q;
+            getIndices(item.al, index1, index1Q, index2, index2Q);
 
-			rgAssignment rgReturn;
-			if (item.isPaired) {
-				string sindex1, sindex1Q, sindex2, sindex2Q;
-				bool al2HasIndex = getIndices(item.al2, sindex1, sindex1Q, sindex2, sindex2Q, true);
+            rgAssignment rgReturn = assignReadGroup(index1, index1Q, index2, index2Q, 
+                                                  rgScoreCutoff, fracConflict, 
+                                                  mismatchesTrie, qualOffset);
+            check_thresholds(rgReturn);
 
-				// Check for index consistency in paired-end reads
-				if (al2HasIndex) {
-					if (index1 != sindex1 || index1Q != sindex1Q || index2 != sindex2 || index2Q != sindex2Q) {
-						cerr << "Inconsistent indices between paired reads: " << item.al.Name << " vs " << item.al2.Name << endl;
-						continue;  // Skip this pair
-					}
-				}
+            // Process alignments
+            updateRecord(item.al, rgReturn, data->failBAM);
+            if (item.isPaired) {
+                updateRecord(item.al2, rgReturn, data->failBAM);
+            }
 
-				rgReturn = assignReadGroup(index1, index1Q, index2, index2Q, rgScoreCutoff, fracConflict, mismatchesTrie, qualOffset);
-				check_thresholds(rgReturn);
+            // Handle error tracking
+            if (data->printError) {
+                string keyIndex = index2.empty() ? index1 : index1 + "#" + index2;
+                
+                pthread_mutex_lock(&conflictSeqMutex);
+                if (rgReturn.conflict) (*(data->conflictSeq))[keyIndex]++;
+                pthread_mutex_unlock(&conflictSeqMutex);
+                
+                pthread_mutex_lock(&unknownSeqMutex);
+                if (rgReturn.unknown) (*(data->unknownSeq))[keyIndex]++;
+                pthread_mutex_unlock(&unknownSeqMutex);
+                
+                pthread_mutex_lock(&wrongSeqMutex);
+                if (rgReturn.wrong) (*(data->wrongSeq))[keyIndex]++;
+                pthread_mutex_unlock(&wrongSeqMutex);
+            }
 
-				updateRecord(item.al, rgReturn, data->failBAM);
-				updateRecord(item.al2, rgReturn, data->failBAM);
+            // Add to output queue
+            pthread_mutex_lock(&outputQueueMutex);
+            ProcessedWorkItem processedItem;
+            processedItem.item = item;
+            processedItem.written = false;
+            outputQueue.push(processedItem);
 
-				// For paired-end reads:
-				pthread_mutex_lock(&writerMutex);
-				data->writer->SaveAlignment(item.al);
-				data->writer->SaveAlignment(item.al2);
-				pthread_mutex_unlock(&writerMutex);
-			} else {
-				rgReturn = assignReadGroup(index1, index1Q, index2, index2Q, rgScoreCutoff, fracConflict, mismatchesTrie, qualOffset);
-				check_thresholds(rgReturn);
-
-				updateRecord(item.al, rgReturn, data->failBAM);
-				
-				// For single-end reads:
-				pthread_mutex_lock(&writerMutex);
-				data->writer->SaveAlignment(item.al);
-				pthread_mutex_unlock(&writerMutex);
-			}
-
-			// Record unresolved indices
-			if (data->printError) {
-				string keyIndex = index2.empty() ? index1 : index1 + "#" + index2;
-
-				if (rgReturn.conflict) {
-					pthread_mutex_lock(&conflictSeqMutex);
-					(*(data->conflictSeq))[keyIndex]++;
-					pthread_mutex_unlock(&conflictSeqMutex);
-				}
-				if (rgReturn.unknown) {
-					pthread_mutex_lock(&unknownSeqMutex);
-					(*(data->unknownSeq))[keyIndex]++;
-					pthread_mutex_unlock(&unknownSeqMutex);
-				}
-				if (rgReturn.wrong) {
-					pthread_mutex_lock(&wrongSeqMutex);
-					(*(data->wrongSeq))[keyIndex]++;
-					pthread_mutex_unlock(&wrongSeqMutex);
-				}
-			}
-			itemsProcessed++;
-			if (itemsProcessed % 1000 == 0) {
-				pthread_mutex_lock(&queueMutex);
-				// std::cout << "Current queue size: " << workQueue.size() << std::endl;
-				pthread_mutex_unlock(&queueMutex);
-			}
-		}
+            // Try to write outputs in order
+            while (!outputQueue.empty() && outputQueue.top().item.rank == nextRankToWrite) {
+                ProcessedWorkItem toWrite = outputQueue.top();
+                outputQueue.pop();
+                
+                pthread_mutex_lock(&writerMutex);
+                data->writer->SaveAlignment(toWrite.item.al);
+                if (toWrite.item.isPaired) {
+                    data->writer->SaveAlignment(toWrite.item.al2);
+                }
+                pthread_mutex_unlock(&writerMutex);
+                
+                nextRankToWrite++;
+            }
+            pthread_mutex_unlock(&outputQueueMutex);
+        }
     }
-	// After the run:
-	// std::cout << "Total items processed: " << itemsProcessed << std::endl;
-    // std::cout << "Thread " << pthread_self() << " finished processing." << std::endl;
     return NULL;
 }
 
@@ -1037,6 +1038,17 @@ double get_memory_usage() {
     return r_usage.ru_maxrss / 1024.0;  // Convert to MB
 }
 
+
+
+// struct CompareWorkItemRank {
+//     bool operator()(const WorkItem* a, const WorkItem* b) {
+//         return a->rank > b->rank;  // Priority queue is max heap, we want min rank first
+//     }
+// };
+
+// std::priority_queue<WorkItem*, vector<WorkItem*>, CompareWorkItemRank> outputQueue;
+// pthread_mutex_t outputQueueMutex = PTHREAD_MUTEX_INITIALIZER;
+// int nextRankToWrite = 0;
 
 int main (int argc, char *argv[]) {
 
@@ -1638,12 +1650,14 @@ int main (int argc, char *argv[]) {
 	// processing by worker threads. After all data is read, it signals the worker threads to finish and 
 	// waits for them to complete.
 
+	int currentRank = 0;
 	BamAlignment al, al2;
 	while (reader.GetNextAlignment(al)) {
 		WorkItem item;
 		item.al = al;
 		item.isPaired = false;
 		item.data = &threadData;
+		item.rank = currentRank++;
 
 		if (al.IsPaired() && reader.GetNextAlignment(al2) && al.Name == al2.Name) {
 			item.al2 = al2;
@@ -1651,12 +1665,7 @@ int main (int argc, char *argv[]) {
 		}
 
 		pthread_mutex_lock(&queueMutex);
-		auto queueStartTime = std::chrono::high_resolution_clock::now();
 		workQueue.push(item);
-		auto queueEndTime = std::chrono::high_resolution_clock::now();
-		std::chrono::duration<double> queueTime = queueEndTime - queueStartTime;
-		// std::cout << "Time to populate queue: " << queueTime.count() << " seconds" << std::endl;
-		// std::cout << "Initial queue size: " << workQueue.size() << std::endl;
 		pthread_cond_signal(&queueCond);
 		pthread_mutex_unlock(&queueMutex);
 	}
@@ -1670,6 +1679,17 @@ int main (int argc, char *argv[]) {
 		pthread_join(threads[i], NULL);
 	}
 
+	pthread_mutex_lock(&outputQueueMutex);
+	while (!outputQueue.empty()) {
+		ProcessedWorkItem toWrite = outputQueue.top();
+		outputQueue.pop();
+		
+		writer.SaveAlignment(toWrite.item.al);
+		if (toWrite.item.isPaired) {
+			writer.SaveAlignment(toWrite.item.al2);
+		}
+	}
+	pthread_mutex_unlock(&outputQueueMutex);
 
 	reader.Close();
 	writer.Close();
